@@ -1,0 +1,151 @@
+
+R version 4.0.5 (2021-03-31) -- "Shake and Throw"
+Copyright (C) 2021 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> # Run the analysis using GADEM
+> 
+> 
+> .libPaths("~/R/x86_64-pc-linux-gnu-library/4.0")
+> 
+> # Object out.ranges stores all the genomic Ranges -- a total of 78601 ranges
+> out.ranges<- readRDS("/scratch/greenwood/kaiqiong.zhao/kaiqiong.zhao/Projects/WitcherKI/Results/out_ranges_June_28.rds")
+> #o <- order(out.ranges$PValue) 
+> # The ordered results are in 
+> #out.ranges[o]
+> 
+> 
+> # the best is the index of the window that is the most significant in each cluster,
+> #bets.logFC is the log-fold change of that 'best' window
+> 
+> 
+> library(rGADEM)
+Loading required package: Biostrings
+Loading required package: BiocGenerics
+Loading required package: parallel
+
+Attaching package: ‘BiocGenerics’
+
+The following objects are masked from ‘package:parallel’:
+
+    clusterApply, clusterApplyLB, clusterCall, clusterEvalQ,
+    clusterExport, clusterMap, parApply, parCapply, parLapply,
+    parLapplyLB, parRapply, parSapply, parSapplyLB
+
+The following objects are masked from ‘package:stats’:
+
+    IQR, mad, sd, var, xtabs
+
+The following objects are masked from ‘package:base’:
+
+    anyDuplicated, append, as.data.frame, basename, cbind, colnames,
+    dirname, do.call, duplicated, eval, evalq, Filter, Find, get, grep,
+    grepl, intersect, is.unsorted, lapply, Map, mapply, match, mget,
+    order, paste, pmax, pmax.int, pmin, pmin.int, Position, rank,
+    rbind, Reduce, rownames, sapply, setdiff, sort, table, tapply,
+    union, unique, unsplit, which.max, which.min
+
+Loading required package: S4Vectors
+Loading required package: stats4
+
+Attaching package: ‘S4Vectors’
+
+The following object is masked from ‘package:base’:
+
+    expand.grid
+
+Loading required package: IRanges
+Loading required package: XVector
+
+Attaching package: ‘Biostrings’
+
+The following object is masked from ‘package:base’:
+
+    strsplit
+
+Loading required package: BSgenome
+Loading required package: GenomeInfoDb
+Loading required package: GenomicRanges
+Loading required package: rtracklayer
+Loading required package: seqLogo
+Loading required package: grid
+
+Attaching package: ‘rGADEM’
+
+The following object is masked from ‘package:seqLogo’:
+
+    consensus
+
+> library(BSgenome.Hsapiens.UCSC.hg19)
+> #library(rtracklayer)
+> #--------------------------------------------------------------------
+> # Step 1: Generate a 'XString' Object from the positively significant clusters from csaw package
+> #--------------------------------------------------------------------
+> #Object 'Sequences' should be of type 'XStringViews', 'DNAStringSet' or 'RangedData'
+> 
+> Sig_res <- out.ranges[out.ranges$FDR <=0.05,]  #24714 ranges 
+> 
+> Sig_res_up <- Sig_res[Sig_res$direction=="up",] # 10567
+> 
+> Sig_res_down <- Sig_res[Sig_res$direction=="down",] # 14136
+> 
+> 
+> 
+> # convert GRanges back to a RangedData
+> 
+> 
+> gr <- Sig_res_down
+> 
+> 
+> #see<-RangedData(gr@ranges,space = gr@seqnames)
+> 
+> #see <- GRanges(seqnames=gr@seqnames, ranges = gr@ranges, seqinfo = gr@seqinfo, strand = gr@strand)
+> 
+> Seqs_see=Biostrings::getSeq(Hsapiens, GRanges(gr) )
+> 
+> # Run GADEM
+> 
+> time.0 <- Sys.time()
+> gadem<-GADEM(Sequences = Seqs_see,verbose=1,genome=Hsapiens, seed = 2)
+*** Start C Programm ***
+==============================================================================================
+input sequence file:  
+number of sequences and average length:				7487 361.8
+Use pgf method to approximate llr null distribution
+parameters estimated from sequences in:  
+
+number of GA generations & population size:			5 100
+
+PWM score p-value cutoff for binding site declaration:		2.000000e-04
+ln(E-value) cutoff for motif declaration:			0.000000
+
+number of EM steps:						40
+minimal no. sites considered for a motif:			374
+
+[a,c,g,t] frequencies in input data:				0.237120 0.262880 0.262880 0.237120
+==============================================================================================
+*** Running an unseeded analysis ***
+GADEM cycle  1: enumerate and count k-mers... top 3  4, 5-mers: 20 40 60
+Done.
+Initializing GA... Done.
+
+ *** caught segfault ***
+address 0x7f904452ea68, cause 'memory not mapped'
+
+Traceback:
+ 1: GADEM(Sequences = Seqs_see, verbose = 1, genome = Hsapiens, seed = 2)
+An irrecoverable exception occurred. R is aborting now ...

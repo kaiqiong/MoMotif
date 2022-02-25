@@ -1,0 +1,513 @@
+---
+title: "Detecting differential binding between CTCF mutated (H284N) cell lines and wild type: an analysis of ChIP-seq data using 'csaw' package"
+author:
+- name: Kaiqiong Zhao
+date: "`r BiocStyle::doc_date()`" 
+output: 
+   BiocStyle::html_document: 
+    highlight: pygments 
+    toc_float: true 
+    fig_width: 6
+    fig_height: 4
+    keep_md: true
+    fig_caption: yes
+bibliography: ref.bib
+
+vignette: >
+  %\VignetteIndexEntry{Chip-Seq data analysis}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+```{r style, echo=TRUE, results='hide', message=FALSE}
+library(BiocStyle)
+library(knitr)
+opts_chunk$set(error=FALSE, message=FALSE, warning=FALSE)
+opts_chunk$set(fig.asp=1)
+```
+
+This vignette is directly adopted from the users guide of R Bioconductor package `csaw'
+
+# Overview
+
+```{r}
+library(IRanges)
+library(BiocGenerics)
+library(GenomicAlignments)
+library(GenomicRanges)
+library(csaw)
+library(edgeR)
+library(Rsamtools)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(org.Hs.eg.db)
+library(Gviz)
+```
+
+
+```{r}
+dat_dir <- "/scratch/greenwood/kaiqiong.zhao/Michael_Witcher_KO_data/2021-01-KO-vs-WT-2021-06-KI/"
+bam.files_KO =system(paste0("ls ",dat_dir, "Bam/KI/*", " | grep -v bai"), intern=T)
+bam.files_WT =system(paste0("ls ",dat_dir, "Bam/WT/*", " | grep -v bai"), intern=T)
+
+bam.files <- c(bam.files_KO, bam.files_WT)
+
+#peak_files=system(paste0("ls ", dat_dir, "Bed/*.narrowPeak | grep -v KO |  grep -v WT-IP5"), intern=T)
+#peak_files = peak_files[c(grep("KIKI-IP", peak_files), grep("WT", peak_files))]
+```
+
+Seven samples were chromatin immunoprecipitation sequenced (ChIp-seq). Three of them are KI samples and the rest are wildtype.
+
+```{r}
+samples=gsub(".sorted.bam", "",basename(bam.files))
+groups = c("KI", "KI", "KI", 'WT', "WT", "WT", "WT")
+conditions = unique(groups)
+pander::pander(cbind(samples))
+```
+
+The objective of this document was to determine the differential bindings, as a consequences of CTCF mutation.
+
+# Pre-processing checks
+
+## Examining mapping statistics
+
+We check some mapping statistics for the dataset with `r Biocpkg("Rsamtools")`.
+
+```{r, eval = F}
+library(Rsamtools)
+diagnostics <- list()
+for (bam in bam.files) {
+    total <- countBam(bam)$records
+    mapped <- countBam(bam, param=ScanBamParam(
+        flag=scanBamFlag(isUnmapped=FALSE)))$records
+    marked <- countBam(bam, param=ScanBamParam(
+        flag=scanBamFlag(isUnmapped=FALSE, isDuplicate=TRUE)))$records # the ducplicated record
+    diagnostics[[basename(bam)]] <- c(Total=total, Mapped=mapped, Marked=marked)
+}
+diag.stats <- data.frame(do.call(rbind, diagnostics))
+diag.stats$Prop.mapped <- diag.stats$Mapped/diag.stats$Total*100
+diag.stats$Prop.marked <- diag.stats$Marked/diag.stats$Mapped*100
+diag.stats
+save(diag.stats, file="/scratch/greenwood/kaiqiong.zhao/kaiqiong.zhao/Projects/WitcherKI/Results/diag_stats.RData")
+```
+
+```{r}
+load("/scratch/greenwood/kaiqiong.zhao/kaiqiong.zhao/Projects/WitcherKI/Results/diag_stats.RData")
+diag.stats
+```
+
+'Marked' reads are the duplicated reads. Less marked reads stands for better quality. Seems like the duplicated reads have been already removed.
+
+## Obtaining the ENCODE blacklist for human genome
+
+We first use the ENCODE blacklist to remove reads in problematic regions (such as centromeres, telomeres and satellite repeats), because these regions have been shown to often produce artifact signal. This is a standard QC step for functional genomics analysis.
+
+```{r}
+library(BiocFileCache)
+bfc <- BiocFileCache("local", ask=FALSE)
+black.path <- bfcrpath(bfc, file.path("https://www.encodeproject.org",
+    "files/ENCFF419RSJ/@@download/ENCFF419RSJ.bed.gz"))
+
+library(rtracklayer)
+blacklist <- import(black.path)
+blacklist
+```
+
+## Setting up the read extraction parameters
+
+We set the minimum mapping quality score to 50 to remove poorly or non-uniquely aligned reads.
+
+```{r}
+library(csaw)
+param <- readParam(minq=50, discard=blacklist)
+param
+```
+
+# Computing the average fragment length
+
+The average fragment length is estimated by maximizing the cross-correlation function.
+Generally, cross-correlations for TF datasets are sharper than for histone marks as the TFs typically contact a smaller genomic interval.
+
+
+
+```{r, eval = T}
+max.delay = 500
+x <- correlateReads(bam.files, param=reform(param, dedup=TRUE), max.dist = max.delay)
+#x_KIKI <- correlateReads(bam.files[1:2], param=reform(param, dedup=TRUE), max.dist = max.delay)
+#x_WT <- correlateReads(bam.files[3], param=reform(param, dedup=TRUE), max.dist = max.delay)
+save(x, file="/scratch/greenwood/kaiqiong.zhao/kaiqiong.zhao/Projects/WitcherKI/Results/x_correlatedReads.RData")
+```
+
+```{r}
+load("/scratch/greenwood/kaiqiong.zhao/kaiqiong.zhao/Projects/WitcherKI/Results/x_correlatedReads.RData")
+frag.len <- maximizeCcf(x)
+frag.len
+```
+
+```{r ccfplot, fig.cap="Cross-correlation function (CCF) against delay distance. The delay with the maximum correlation is shown as the red line."}
+plot(1:length(x)-1, x, xlab="Delay (bp)", ylab="CCF", type="l")
+abline(v=frag.len, col="red")
+text(x=frag.len, y=min(x), paste(frag.len, "bp"), pos=4, col="red")
+```
+
+# Counting reads into windows
+
+"Reads are then counted into sliding windows using `r Biocpkg("csaw")` [@lun2015csaw].
+For TF data analyses, smaller windows are necessary to capture sharp binding sites.
+In this case, a window size of 10 bp is used. The `windowCounts()` function produces a `RangedSummarizedExperiment` object containing a matrix of such counts.
+Each row corresponds to a window; each column represents a BAM file corresponding to a single sample"
+
+
+```{r, eval=F}
+win.data <- windowCounts(bam.files, param= param, width=10, ext=frag.len)
+save(win.data, file="/scratch/greenwood/kaiqiong.zhao/kaiqiong.zhao/Projects/WitcherKI/Results/win_data.RData")
+```
+
+```{r}
+load("/scratch/greenwood/kaiqiong.zhao/kaiqiong.zhao/Projects/WitcherKI/Results/win_data.RData")
+win.data
+```
+
+"The default spacing of 50 bp is also used here. This may seem inappropriate given that the windows are only 10 bp. However, reads lying in the interval between adjacent windows will still be counted into several windows. This is because reads are extended to the value of `frag.len`, which is substantially larger than the 50 bp spacing^[Smaller spacings can be used but will provide little benefit given that each extended read already overlaps multiple windows.]."
+
+
+# Filtering windows by abundance
+
+
+Reads are counted into large bins and the median coverage across those bins is used as an estimate of the background abundance^[Large bins are necessary to obtain a precise estimate of background coverage, which would otherwise be too low in individual windows.].
+This estimate is then compared to the average abundances of the windows, after rescaling to account for differences in the window and bin sizes.
+A window is only retained if its coverage is 3-fold higher than that of the background regions,
+    i.e., the abundance of the window is greater than the background abundance estimate by log~2~(3) or more.
+This removes a large number of windows that are weakly or not marked and are likely to be irrelevant.
+
+```{r, eval = F}
+bins <- windowCounts(bam.files, bin=TRUE, width=10000, param=param)
+save(bins, file="/scratch/greenwood/kaiqiong.zhao/kaiqiong.zhao/Projects/WitcherKI/Results/bins.RData")
+
+```
+
+
+```{r}
+#bins <- windowCounts(bam.files, bin=TRUE, width=10000, param=param)
+load("/scratch/greenwood/kaiqiong.zhao/kaiqiong.zhao/Projects/WitcherKI/Results/bins.RData")
+filter.stat <- filterWindowsGlobal(win.data, bins)
+min.fc <- 3
+keep <- filter.stat$filter > log2(min.fc)
+summary(keep)
+```
+
+The effect of the fold-change threshold is examined visually in Figure \@ref(fig:bghistplot).
+The chosen threshold is greater than the abundances of most bins in the genome -- presumably, those that contain background regions.
+This suggests that the filter will remove most windows lying within background regions.
+
+```{r bghistplot, fig.cap="Histogram of average abundances across all 10 kbp genomic bins. The filter threshold is shown as the red line."}
+hist(filter.stat$back.abundances, main="", breaks=50,
+    xlab="Background abundance (log2-CPM)")
+threshold <- filter.stat$abundances[1] - filter.stat$filter[1] + log2(min.fc)
+abline(v=threshold, col="red")
+```
+
+The actual filtering itself is done by simply subsetting the `RangedSummarizedExperiment` object.
+
+```{r}
+filtered.data <- win.data[keep,]
+discard.data <- win.data[!keep,]
+```
+
+# Normalizing for sample-specific trended biases
+
+Normalization is required to eliminate confounding sample-specific biases prior to any comparisons between samples.
+Here, a trended bias is present between samples in Figure \@ref(fig:trendplot).
+This refers to a systematic fold-difference in per-window coverage between samples that changes according to the average abundance of the window.
+
+```{r trendplot, fig.cap="Abundance-dependent trend in the log-fold change between two samples (KIKI2 over WT), across all windows retained after filtering. A smoothed spline fitted to the log-fold change against the average abundance is also shown in red."}
+win.ab <- scaledAverage(filtered.data)
+adjc <- calculateCPM(filtered.data, use.offsets=FALSE)
+logfc <- adjc[,2] - adjc[,3]
+smoothScatter(win.ab, logfc, ylim=c(-6, 6), xlim=c(0, 5),
+    xlab="Average abundance", ylab="Log-fold change")
+
+lfit <- smooth.spline(logfc~win.ab, df=5)
+o <- order(win.ab)
+lines(win.ab[o], fitted(lfit)[o], col="red", lty=2)
+```
+
+Trended biases cannot be removed by scaling methods like TMM normalization [@robinson2010scaling], as the amount of scaling required varies with the abundance of the window.
+Rather, non-linear normalization methods must be used.
+`r Biocpkg("csaw")` implements a version of the fast loess method [@ballman2004fast] that has been modified to handle count data [@lun2015csaw].
+This produces a matrix of offsets that can be used during GLM fitting.
+
+```{r}
+filtered.data <- normOffsets(filtered.data)
+offsets <- assay(filtered.data, "offset")
+head(offsets)
+#filtered <- normFactors(bins, se.out=filtered.data)
+#(normfacs <- filtered.data$norm.factors)
+#offsets <- normfacs
+```
+
+The effect of non-linear normalization is visualized with another mean-difference plot.
+Once the offsets are applied to adjust the log-fold changes, the trend is eliminated from the plot (Figure \@ref(fig:normplot)).
+The cloud of points is also centred at a log-fold change of zero.
+This indicates that normalization was successful in removing the differences between samples. 
+
+```{r normplot, fig.cap="Effect of non-linear normalization on the trended bias between two samples (KIKI2 vs. WT). Normalized log-fold changes are shown for all windows retained after filtering. A smoothed spline fitted to the log-fold change against the average abundance is also shown in red."}
+norm.adjc <- calculateCPM(filtered.data, use.offsets=TRUE)
+norm.fc <- norm.adjc[,2]-norm.adjc[,3]
+smoothScatter(win.ab, norm.fc, ylim=c(-6, 6), xlim=c(0, 5),
+    xlab="Average abundance", ylab="Log-fold change")
+
+lfit <- smooth.spline(norm.fc~win.ab, df=5)
+lines(win.ab[o], fitted(lfit)[o], col="red", lty=2)
+```
+
+
+# Statistical modelling of biological variability
+
+## Setting up the design matrix
+
+Counts for each window are modelled using `r Biocpkg("edgeR")` as previously described [@mccarthy2012differential; @robinson2010edger].
+We convert our `RangedSummarizedExperiment` object into a `DGEList`.
+
+```{r}
+library(edgeR)
+y <- asDGEList(filtered.data)
+summary(y)
+```
+
+We then construct a design matrix for our experimental design.
+Again, we have a simple one-way layout with two groups, where the KIKI group has two replicates
+
+```{r}
+groups <- factor(groups)
+design <- model.matrix(~0+groups)
+colnames(design) <- levels(groups)
+design
+```
+
+## Estimating the NB dispersion
+
+The `RangedSummarizedExperiment` object is coerced into a `DGEList` object (plus offsets) for use in `r Biocpkg("edgeR")`.
+Estimation of the NB dispersion is performed using the `estimateDisp` function.
+Specifically, a NB dispersion trend is fitted to all windows against the average abundance.
+This means that empirical mean-dispersion trends can be flexibly modelled.
+
+
+```{r}
+y <- estimateDisp(y, design)
+summary(y$trended.dispersion)
+
+```
+
+The NB dispersion trend is visualized in Figure \@ref(fig:bcvplot) as the biological coefficient of variation (BCV), i.e., the square root of the NB dispersion.
+Note that only the trended dispersion will be used in the downstream steps -- the common and tagwise values are only shown for diagnostic purposes.
+Specifically, the common BCV provides an overall measure of the variability in the data set, averaged across all windows.
+Data sets with common BCVs ranging from 10 to 20% are considered to have low variability, i.e., counts are highly reproducible.
+The tagwise BCVs should also be dispersed above and below the fitted trend, indicating that the fit was successful.
+
+```{r bcvplot, fig.cap="Abundance-dependent trend in the BCV for each window, represented by the blue line. Common (red) and tagwise estimates (black) are also shown."}
+plotBCV(y)
+```
+
+
+## Estimating the QL dispersion
+
+Additional modelling is provided with the QL methods in `r Biocpkg("edgeR")` [@lund2012ql].
+This introduces a QL dispersion parameter for each window, which captures variability in the NB dispersion around the fitted trend for each window.
+Thus, the QL dispersion can model window-specific variability, whereas the NB dispersion trend is averaged across many windows.
+However, with limited replicates, there is not enough information for each window to stably estimate the QL dispersion.
+This is overcome by sharing information between windows with empirical Bayes (EB) shrinkage.
+The instability of the QL dispersion estimates is reduced by squeezing the estimates towards an abundance-dependent trend (Figure \@ref(fig:qlplot)).
+
+```{r qlplot, fig.cap="Effect of EB shrinkage on the raw QL dispersion estimate for each window (black) towards the abundance-dependent trend (blue) to obtain squeezed estimates (red)."}
+fit <- glmQLFit(y, design, robust=TRUE)
+plotQLDisp(fit)
+```
+
+The extent of shrinkage is determined by the prior degrees of freedom (d.f.).
+Large prior d.f. indicates that the dispersions were similar across windows, such that strong shrinkage to the trend could be performed to increase stability and power.
+Small prior d.f. indicates that the dispersions were more variable.
+In such cases, less squeezing is performed as strong shrinkage would be inappropriate.
+
+```{r}
+summary(fit$df.prior)
+```
+
+Also note the use of `robust=TRUE` in the `glmQLFit()` call, which reduces the sensitivity of the EB procedures to outlier variances.
+This is particularly noticeable in Figure \@ref(fig:qlplot) with highly variable windows that (correctly) do not get squeezed towards the trend. 
+
+## Examining the data with MDS plots
+
+Multi-dimensional scaling (MDS) plots are used to examine the similarities between samples. 
+The distance between a pair of samples on this plot represents the overall log-fold change between those samples. 
+Ideally, replicates should cluster together while samples from different conditions should be separate.
+Samples of different cell types separate well in Figure \@ref(fig:mdsplot), indicating that significant differences are likely to be present between cell types.
+
+```{r mdsplot, fig.cap="MDS plot with two dimensions for all samples. Samples are labelled and coloured according to the experimental conditions. A larger top set of windows was used to improve the visualization of the genome-wide differences between the WT samples."}
+plotMDS(cpm(y, log=TRUE), top=10000, labels=groups,
+    col=c("red", "blue")[as.integer(groups)])
+```
+
+The presence of a large batch effect between replicates is not ideal.
+Nonetheless, we can still proceed with the DB analysis - albeit with some loss of power due to the inflated NB dispersions - 
+given that there are strong differences between genotypes in Figure \@ref(fig:mdsplot),
+
+# Testing for DB and controlling the FDR
+
+## Testing for DB with QL F-tests
+
+DB windows are identified using the QL F-test.
+Windows are clustered into regions and the region-level FDR is controlled using Simes' method [@simes1986; @lun2014denovo].
+
+```{r}
+contrast <- makeContrasts(KI-WT, levels=design)
+res <- glmQLFTest(fit, contrast=contrast)
+head(res$table)
+```
+
+
+## Controlling the FDR across regions
+
+
+Aggregating windows into regions and combining the p-values.
+Here, adjacent windows less than 100 bp apart are aggregated into clusters.
+Each cluster represents a genomic region.
+```{r}
+merged <- mergeWindows(rowRanges(filtered.data), tol=100, max.width=5000)
+tabcom <- combineTests(merged$id, res$table)
+head(tabcom)
+```
+
+```{r}
+head(tabcom[ order(tabcom$FDR), ])
+```
+
+
+Each row of the output table contains the statistics for a single cluster, including the combined *p*-value before and after the BH correction.
+Additional fields include `nWindows`, the total number of windows in the cluster; `logFC.up`, the number of windows with a DB log-fold change above 0.5; and `log.FC.down`, the number fof windows with a log-fold change below -0.5.
+
+## Examining the scope and direction of DB
+
+```{r}
+is.sig <- tabcom$FDR <= 0.05
+summary(is.sig)
+```
+
+Determining the direction of DB is more complicated, as clusters may contain windows that are changing in opposite directions.
+One approach is to use the direction of DB from the windows that contribute most to the combined $p$-value, as reported in the `direction` field for each cluster.
+If significance is driven by windows changing in both directions, the direction for the cluster is defined as `"mixed"`.
+Otherwise, the reported direction is the same as that of the windows, i.e., `"up"` or `"down"`.
+
+```{r}
+table(tabcom$direction[is.sig])
+```
+
+Another approach is to use the log-fold change of the most significant window (identified with the `getBestTest()` function) as a proxy for the log-fold change of the cluster.
+
+```{r}
+tabbest <- getBestTest(merged$id, res$table)
+head(tabbest[order(tabbest$FDR),])
+```
+
+In the above table, each row contains the statistics for each cluster.
+Of interest are the `best` and `logFC` fields.
+The former is the index of the window that is the most significant in each cluster, while the latter is the log-fold change of that window.
+This is used to obtain a summary of the direction of DB across all clusters/regions.
+
+```{r}
+is.sig.pos <- (tabbest$rep.logFC > 0)[is.sig]
+summary(is.sig.pos)
+```
+
+This approach is generally satisfactory, though it will not capture multiple changes in opposite directions^[Try `mixedClusters()` to formally detect clusters that contain significant changes in both directions.].
+It also tends to overstate the change in each cluster.
+
+These results are saved to file, as previously described.
+Key objects are also saved for convenience.
+
+## Saving results to file
+
+```{r, eval = T}
+out.ranges <- merged$region
+mcols(out.ranges) <- data.frame(tabcom,
+    best.pos=mid(ranges(rowRanges(filtered.data[tabbest$rep.test]))),
+    best.logFC=tabbest$rep.logFC)
+saveRDS(out.ranges, file = "/scratch/greenwood/kaiqiong.zhao/kaiqiong.zhao/Projects/WitcherKI/Results/out_ranges_June_28.rds")
+#saveRDS( out.ranges,file="Results/CTCF_results.rds",)
+```
+
+# Annotation and visualization
+
+Annotation for each region is added using the `detailRanges` function, as previously described.
+
+```{r, eval = T}
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(org.Hs.eg.db)
+anno <- detailRanges(out.ranges, orgdb=org.Hs.eg.db,
+    txdb=TxDb.Hsapiens.UCSC.hg19.knownGene)
+mcols(out.ranges) <- cbind(mcols(out.ranges), anno)
+```
+
+One of the top-ranked DB regions will be visualized here.
+This corresponds to a simple DB event as all windows are changing in the same direction, i.e., up in the WT.
+
+```{r, eval = T}
+o <- order(out.ranges$PValue)    
+cur.region <- out.ranges[o[1]]
+cur.region
+```
+`
+
+We use `r Biocpkg("Gviz")` [@hahne2016visualizing] to plot the results.
+We set up some tracks to display genome coordinates and gene annotation.
+
+```{r, eval = T}
+library(Gviz)
+gax <- GenomeAxisTrack(col="black", fontsize=15, size=2)
+greg <- GeneRegionTrack(TxDb.Hsapiens.UCSC.hg19.knownGene, showId=TRUE,
+    geneSymbol=TRUE, name="", background.title="transparent")
+symbols <- unlist(mapIds(org.Hs.eg.db, gene(greg), "SYMBOL",
+    "ENTREZID", multiVals = "first"))
+symbol(greg) <- symbols[gene(greg)]
+```
+
+We visualize two tracks for each sample -- one for the forward-strand coverage, another for the reverse-strand coverage.
+This allows visualization of the strand bimodality that is characteristic of genuine TF binding sites.
+In Figure \@ref(fig:tfplot), two adjacent sites are present at the *NOTUM* promoter, both of which exhibit increased binding in the WT cell.
+
+```{r tfplot, fig.width=8, fig.asp=0.75, fig.cap="Coverage tracks for TF binding sites that are differentially bound in the KIKI against the WT. Blue and red tracks represent forward- and reverse-strand coverage, respectively, on a per-million scale (capped at 5 in SRR1145788, for visibility).", eval = T}
+library(Gviz)
+collected <- list()
+lib.sizes <- filtered.data$totals/1e6
+
+for (i in 1:length(bam.files)) {
+    reads <- extractReads(bam.file=bam.files[i], cur.region, param=param)
+    pcov <- as(coverage(reads[strand(reads)=="+"])/lib.sizes[i], "GRanges")
+    ncov <- as(coverage(reads[strand(reads)=="-"])/-lib.sizes[i], "GRanges")
+    ptrack <- DataTrack(pcov, type="histogram", lwd=0, ylim=c(-5, 5),
+        name=as.character(samples[i]), col.axis="black", col.title="black",
+        fill="blue", col.histogram=NA)
+    ntrack <- DataTrack(ncov, type="histogram", lwd=0, ylim=c(-5, 5),
+        fill="red", col.histogram=NA)
+    collected[[i]] <- OverlayTrack(trackList=list(ptrack, ntrack))
+}
+
+gax <- GenomeAxisTrack(col="black", fontsize=15, size=2)
+greg <- GeneRegionTrack(TxDb.Hsapiens.UCSC.hg19.knownGene, showId=TRUE,
+    geneSymbol=TRUE, name="", background.title="transparent")
+plotTracks(c(gax, collected, greg), chromosome=as.character(seqnames(cur.region)),
+    from=start(cur.region), to=end(cur.region))
+```
+
+
+
+# Session information
+
+```{r}
+sessionInfo()
+```
+
+# References
+
+
+
