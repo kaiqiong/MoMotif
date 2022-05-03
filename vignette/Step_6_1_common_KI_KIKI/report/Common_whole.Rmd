@@ -1,0 +1,546 @@
+---
+title: "Comparison of CTCF consensus found in the Gained, Lost and stable binding sites common in the KI and KIKI experiments"
+author: "by Kaiqiong Zhao"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: false
+    number_sections: true
+    toc_depth: 4
+    keep_md: true
+editor_options: 
+  chunk_output_type: console
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.width = 10, fig.height = 4) 
+```
+
+
+```{r}
+library(magrittr)
+library(rGADEM)
+library(ggplot2)
+library(reshape2)
+#library(MotIV)
+library(BSgenome.Hsapiens.UCSC.hg19)
+```
+
+
+```{r}
+# 1- Summary without any extensions
+
+#load("~/Documents/Packages/diffMotif/vignette/Step_2_GADEM_for_individual_clusters/Top_1000_three_clusters/GADEM_up_1000.RData")
+load("~/Documents/Packages/diffMotif/vignette/Step_6_1_common_KI_KIKI/Data_whole/GADEM_CommonGain.RData")
+gadem_up <- gadem
+
+load("~/Documents/Packages/diffMotif/vignette/Step_6_1_common_KI_KIKI/Data_whole/GADEM_CommonLost.RData")
+#load("~/Documents/Packages/diffMotif/vignette/Step_2_GADEM_for_individual_clusters/Top_1000_three_clusters/GADEM_down_1000.RData")
+gadem_down <- gadem
+#load("~/Documents/Packages/diffMotif/vignette/Step_2_GADEM_for_individual_clusters/Top_1000_three_clusters/GADEM_null_1000.RData")
+load("~/Documents/Packages/diffMotif/vignette/Step_6_1_common_KI_KIKI/Data_whole/GADEM_CommonStable.RData")
+gadem_null <- gadem
+
+motif11 <- gadem_up@motifList[[1]]
+motif21 <- gadem_down@motifList[[1]]
+motif31 <- gadem_null@motifList[[1]]
+
+
+summary_motif <- function(motif1){
+  seqID_vec <- rep(NA, length(motif1@alignList))
+  seq_vec <- strand_vec <- pval <- seqID_vec
+  
+  for ( i in 1:length(seqID_vec)){
+    seqID_vec[i] <- motif1@alignList[[i]]@seqID
+    pval[i] <- motif1@alignList[[i]]@pval
+    strand_vec[i] <- motif1@alignList[[i]]@strand
+    seq_vec[i] <- motif1@alignList[[i]]@seq
+  }
+  
+  out = list(seq_vec=seq_vec, strand_vec = strand_vec, seqID_vec = seqID_vec)
+  return(out)
+}
+
+rr1 = summary_motif(motif11)
+rr2 = summary_motif(motif21)
+rr3 = summary_motif(motif31)
+```
+
+
+Motif identified in the Gained cluster
+
+```{r}
+motifs <- getPWM(gadem_up)
+seqLogo(motifs[[1]])
+```
+
+
+Motif identified in the Lost cluster
+```{r}
+motifs <- getPWM(gadem_down)
+seqLogo(motifs[[1]])
+```
+
+
+Motif identified in the Stable cluster
+```{r}
+motifs <- getPWM(gadem_null)
+seqLogo(motifs[[1]])
+```
+
+```{r, eval= F}
+
+motifs <- getPWM(gadem_up)
+seqLogo(motifs[[1]])
+seqLogo(consensusMatrix( reverseComplement(DNAStringSet(rr1$seq_vec )), as.prob = TRUE)[1:4,])   #  --- direction-- reverse
+
+seqLogo(getPWM(gadem_down)[[1]])  # ---- direction --- not reverse
+seqLogo(consensusMatrix( reverseComplement(DNAStringSet(rr2$seq_vec )), as.prob = TRUE)[1:4,])
+
+seqLogo(getPWM(gadem_null)[[1]]) # ---- direction --- not reverse
+seqLogo(consensusMatrix( reverseComplement(DNAStringSet(rr3$seq_vec )), as.prob = TRUE)[1:4,])
+
+
+
+seqLogo(motifs[[2]])
+see = summary_motif( gadem_up@motifList[[2]])$seq_vec
+seqLogo(consensusMatrix( reverseComplement(DNAStringSet(see )), as.prob = TRUE)[1:4,])
+
+seqLogo(motifs[[3]])
+#seqLogo(motifs[[4]])
+#seqLogo(motifs[[5]])
+#seqLogo(motifs[[6]])
+#seqLogo(motifs[[7]])
+
+
+
+
+nOccurrences(gadem)[1]
+
+#seqLogo( consensusMatrix(DNAStringSet(seqs_set1), as.prob = TRUE)[1:4,])
+
+```
+
+
+
+```{r}
+# 2- Load the raw sequences
+
+#out.ranges<- readRDS("/Users/kaiqiongzhao/Documents/Projects_since_2021/WitcherKIKI/Results/out_ranges_July_8.rds")
+#out_order <- out.ranges[order(out.ranges$PValue),]
+
+gr_null <- read.delim(file = "~/Documents/Packages/diffMotif/vignette/Step_6_1_common_KI_KIKI/Data_whole/CommonStable_All.txt" ) # 903
+# 3- Extension based on Biostrings::getSeq
+
+
+gr_down = read.delim(file = "~/Documents/Packages/diffMotif/vignette/Step_6_1_common_KI_KIKI/Data_whole/CommonLost_All.txt" ) # 986
+gr_up = read.delim(file = "~/Documents/Packages/diffMotif/vignette/Step_6_1_common_KI_KIKI/Data_whole/CommonGain_All.txt" ) # 894
+
+Seqs_up=Biostrings::getSeq(Hsapiens, GRanges(gr_up) + 120 )
+Seqs_down=Biostrings::getSeq(Hsapiens, GRanges(gr_down) + 500 )
+Seqs_null=Biostrings::getSeq(Hsapiens, GRanges(gr_null) +500 )  
+```
+
+```{r}
+
+# 4- The main step: Use the extended sequences, mapped on the rr1$seq_vec, i.e. the core motif identified from the original rGADEM
+
+seq_set_extract <- function(rr1, motif11, Seqs_up,bp.use = 21, reverse = FALSE, rrWidth=13, start = 2, end = 14){
+  ext = (bp.use-1)/2 - (rrWidth-1)/2
+  #if(width(rr1$seq_vec) %>% unique()==13){  # up sequences identified by rGADEM
+  
+  #}
+  #if(width(rr1$seq_vec) %>% unique() ==18){ # down sequences
+  #  start = 1; end = 11; center = 6
+  #}
+  #if(width(rr1$seq_vec) %>% unique() ==14){ # null sequences
+  #  start = 3; end = 13; center = 8
+  #}
+  seqs_set <- rep(NA, length(rr1$strand_vec))
+  
+  for ( i in 1:length(rr1$strand_vec)){
+    try({
+    if(rr1$strand_vec[i] == "+"){
+      seq_nn <- Seqs_up[motif11@alignList[[i]]@seqID] #the raw input long sequence
+      #rr1$seq_vec[i]
+      oo = gregexpr(DNAString( rr1$seq_vec[i]), seq_nn)
+      
+      seqs_set[i]<- subseq(seq_nn , start= oo[[1]][1] + (start-1) - ext, end = oo[[1]][1]+(end-1) + ext )
+      
+    }
+    if(rr1$strand_vec[i] == "-"){
+      seq_nn <- Seqs_up[motif11@alignList[[i]]@seqID] #the raw input long sequence -- this is in the reverse strand
+      
+     
+      # Modify the reverse strand extraction-- July 1 reverse the original input strand instead --> advantage: less tuning for start and end for the - strand
+      
+      oo = gregexpr(DNAString(rr1$seq_vec[i]), seq_nn %>% reverseComplement())
+      if(oo[[1]][1] != -1){
+        
+        seqs_set[i]<- subseq(seq_nn %>% reverseComplement() , start= oo[[1]][1] + (start-1) - ext, end = oo[[1]][1]+(end-1) + ext )
+        
+        
+        
+        # if(width(rr1$seq_vec) %>% unique()==18){
+        
+        #  subseq(seq_nn , start= oo[[1]][1] + (start-1) - ext, end = oo[[1]][1]+(end-1) + ext ) %>% reverseComplement()
+        #seqs_set[i]<-subseq(seq_nn %>% reverseComplement(), start= width(seq_nn)-oo[[1]][1], width(seq_nn)-oo[[1]][1]+1+11 )
+        #}
+        
+      }
+    }
+    })
+  }
+  seqs_set <- seqs_set[!is.na(seqs_set)]
+  
+  if(reverse){
+    res =consensusMatrix( reverseComplement(DNAStringSet(seqs_set )), as.prob = TRUE)[1:4,]
+    
+    res_counts = consensusMatrix( reverseComplement(DNAStringSet(seqs_set )), as.prob = FALSE)[1:4,]
+  }else{
+    res =consensusMatrix(DNAStringSet(seqs_set ), as.prob = TRUE)[1:4,]
+    res_counts =consensusMatrix(DNAStringSet(seqs_set ), as.prob = FALSE)[1:4,]
+  }
+  res_melt1<-melt(res)
+  colnames(res_melt1)<- c("Nucleotide", "Position", "Freq.")
+  return(list(res = res,res_counts = res_counts, res_melt = res_melt1, seqs_set=seqs_set)) 
+  # April 5, 2021, extracting the raw sequence matrix as well
+}
+
+res_ext1 <- seq_set_extract(rr1, motif11, Seqs_up, bp.use = 61, reverse = FALSE, rrWidth = 13, start = 2, end = 14)
+#-------
+# for the up cluster -- the orignal rGADEM identified sequences of length 1-14, center is on position 8
+#----------------
+
+# start: start in the original subsequences rr1$seq_vec[i]
+# end: end in the original subsequences rr1$seq_vec[i]
+# make everything symetric; facilitate any follow-up manipulation for the reverse strand
+
+# For the reverse = TRUE sequences, carefully select the start and end
+#rr1, motif11, Seqs_up,bp.use = 21, reverse = FALSE, rrWidth=13, start = 2, end = 14
+res_ext2 <- seq_set_extract(rr2, motif21, Seqs_down, bp.use = 61, reverse = FALSE, rrWidth = 13, start = 1, end = 13)
+# Down cluster -- 16 bp, center is on position 8
+res_ext3<- seq_set_extract(rr3, motif31, Seqs_null, bp.use = 61, reverse = TRUE, rrWidth = 13, start = 2, end = 14)
+```
+
+
+
+# Frequency Difference Plot
+
+
+```{r}
+res1 = res_ext1$res_melt
+res2 = res_ext2$res_melt
+res3 = res_ext3$res_melt
+
+```
+
+
+
+
+```{r}
+
+res1_21<- res1
+res2_21<- res2
+res3_21<- res3
+
+
+
+res_tab = cbind(res1_21, res3_21[,3], res2_21[,3])
+colnames(res_tab)[3:5] <- c("Gained", "Stable", "Lost")
+rownames(res_tab) = NULL
+#pander::pander(res_tab)
+
+```
+
+
+
+## **Lost** v.s. **Stable**
+
+```{r}
+
+res_tab$`lost-stable` <- res_tab$Lost - res_tab$Stable
+res_tab$`Gained-stable` <- res_tab$Gained - res_tab$Stable
+#setwd("~/Documents/Packages/diffMotif/vignette/Step_6_1_common_KI_KIKI/Results_whole")
+#write.csv(res_tab, "Common_all_freqTab_61bp.csv")
+
+ggplot(res_tab, aes(Position, `lost-stable`))+
+  geom_point(stat = "identity" , aes(colour = Nucleotide, shape = Nucleotide))+
+  geom_vline(xintercept = 31, 
+             color = "blue", size=0.5, linetype = 3)+
+    geom_hline(yintercept = 0.1, linetype = 2, size=0.5, color = "gray") +
+     geom_hline(yintercept = -0.1, linetype = 2, size=0.5, color = "gray") +
+  geom_vline(xintercept = 25, linetype = 2, size=0.5) +
+    geom_vline(xintercept = 48, linetype = 2, size=0.5) +
+  ggtitle("Lost cluster v.s Stable Cluster")+
+  ylab("Freq. differences")
+```
+
+Fig 18: Difference of nucleotide differences between the **Lost** and **Stable** clusters. Black dashed lines (at position 25 and 48) are the boundaries of the region with frequency differences greater than 10% between the Lost cluster and the stable cluster
+
+Table: Nucleotide frequences at positions with Freq. differences greater than 10% between the **Lost** and **Stable** clusters.
+
+```{r}
+see = order(abs(res_tab$`lost-stable`), decreasing = T)
+res_tab_ord = res_tab[see,]
+ss = res_tab_ord
+rownames(ss) =NULL
+ss = ss[abs(ss$`lost-stable`)>0.1,]
+print(ss)
+#pander::pander(ss , split.table=Inf)
+```
+
+
+
+
+## **Gained** v.s. **Stable**
+
+```{r}
+ggplot(res_tab, aes(Position, `Gained-stable`))+
+  geom_point(stat = "identity" , aes(colour = Nucleotide, shape = Nucleotide))+
+ geom_vline(xintercept = 31, 
+             color = "blue", size=0.5, linetype = 3)+
+    geom_hline(yintercept = 0.1, linetype = 2, size=0.5, color = "gray") +
+     geom_hline(yintercept = -0.1, linetype = 2, size=0.5, color = "gray") +
+  geom_vline(xintercept = 33, linetype = 2, size=0.5) +
+    geom_vline(xintercept = 47, linetype = 2, size=0.5) +
+  ggtitle("Gained cluster v.s Stable Cluster")+
+  ylab("Freq. differences")+
+  coord_cartesian(ylim = c(-0.2, 0.45))
+```
+
+Fig 19: Difference of nucleotide differences between the **Lost** and **Stable** clusters. Black dashed lines (at position 33 and 47) are the boundaries of the region with frequency differences greater than 10% between the Gained cluster and the Stable cluster.
+
+Table: Nucleotide frequences at positions with Freq. differences greater than 10% between the Gained cluster and the Stable cluster.
+
+
+```{r}
+see = order(abs(res_tab$`Gained-stable`), decreasing = T)
+res_tab_ord = res_tab[see,]
+ss = res_tab_ord
+rownames(ss) =NULL
+ss = ss[abs(ss$`Gained-stable`)>0.1,]
+print(ss)
+#pander::pander(ss , split.table=Inf)
+
+```
+
+
+# Plots of the p-values from the Chi-square test
+
+
+## Lost vs Stable
+
+```{r Chi-square test}
+
+#  Lost vs. Stable
+pval_vec <- rep(NA, 61)
+
+for(posnow in 1:61){
+  temp_tab <- data.frame(lost = res_ext2$res_counts[,posnow], stable= res_ext3$res_counts[,posnow])
+
+  tryCatch({pval_vec[posnow] <- chisq.test(temp_tab)$p.value}, 
+           warning=function(w) print(posnow))
+  
+}
+
+pval_vec_plot <- pval_vec
+pval_vec_plot[which(pval_vec_plot==0)] <- 10^(-300)
+
+#setwd("~/Documents/Packages/diffMotif/vignette/Step_6_1_common_KI_KIKI/Results")
+#pdf("Chi_square_p_vals_Common_1000_Lost_Stable.pdf", height = 5, width = 8)
+plot(-log10(pval_vec_plot), pch = 19, xlab = "Position",
+     ylab = "-log10(p-value)", 
+     main = "Lost cluster v.s Stable Cluster",
+     ylim = c(0, 300))
+abline(v = 31, col = "blue", lty = 4)
+abline(v = 25, lty = 2, col = 1)
+abline(v = 48, lty = 2, col = 1)
+#dev.off()
+```
+
+## Gained vs. Stable
+
+```{r}
+
+#  Gained vs. Stable
+
+pval_vec1 <- rep(NA, 61)
+
+for(posnow in 1:61){
+  temp_tab <- data.frame(gained = res_ext1$res_counts[,posnow], stable= res_ext3$res_counts[,posnow])
+  tryCatch({pval_vec1[posnow] <- chisq.test(temp_tab)$p.value}, 
+           warning=function(w) print(posnow))
+}
+
+
+pval_vec_plot <- pval_vec1
+pval_vec_plot[which(pval_vec_plot==0)] <- 10^(-300)
+
+#pval_vec1[which(pval_vec1==0)] <- 10^(-300)
+
+#pdf("Chi_square_p_vals_KIKI_Gained_Stable.pdf", height = 5, width = 8)
+plot(-log10(pval_vec_plot), pch = 19, xlab = "Position",
+     ylab = "-log10(p-value)", main = "Gained cluster v.s Stable Cluster",
+     ylim = c(0, 300))
+abline(v = 31, col = "blue", lty = 4)
+abline(v = 25, lty = 2, col = 1)
+abline(v = 48, lty = 2, col = 1)
+#dev.off()
+```
+
+```{r}
+
+
+p_vals_KI <- data.frame("Lost.stable" = pval_vec, "Gained.stable" = pval_vec1)
+#setwd("~/Documents/Packages/diffMotif/vignette/Step_6_1_common_KI_KIKI/Results_whole")
+#write.csv(p_vals_KI, file="Chi_square_p_vals_Common_all.csv")
+
+
+#plot(-log10(pval_vec_plot), pch = 19)
+
+#plot(-log10(p.adjust(pval_vec_plot)), pch = 19)
+
+```
+
+
+
+
+# Consensus in the identified window
+
+```{r, eval = T}
+# check
+seqs_set1 <-DNAStringSet(res_ext1$seqs_set) #%>% reverseComplement()  # A sequence of length 61
+seqs_set2 <- res_ext2$seqs_set
+seqs_set3 <- DNAStringSet( res_ext3$seqs_set) %>% reverseComplement()  # A sequence of length 61
+
+
+
+# Matching this to the original input
+matchID1 <- rr1$seqID_vec
+matchID2 <- rr2$seqID_vec
+matchID3 <- rr3$seqID_vec
+
+seqs_set1_sub <- seqs_set1
+seqs_set2_sub <- seqs_set2
+seqs_set3_sub <- seqs_set3
+
+
+
+for( i in 1:length(seqs_set1)){
+  seqs_set1_sub[i] <- subseq(seqs_set1[i], 25, 48)
+}
+for( i in which(!is.na(seqs_set2))){
+  seqs_set2_sub[i] <- subseq(seqs_set2[i], 25, 48)
+}
+for( i in 1:length(seqs_set3)){
+  seqs_set3_sub[i] <- subseq(seqs_set3[i], 25, 48)
+}
+```
+
+
+## Gained 
+
+
+```{r, fig.width = 18, fig.height =5}
+# Check
+
+seqLogo( consensusMatrix(DNAStringSet(seqs_set1_sub) , as.prob = TRUE)[1:4,])
+
+
+#df1 <- as.data.frame(gr_up)
+#df2 <- as.data.frame(gr_down)
+#df3 <- as.data.frame(gr_null)
+
+```
+
+
+## Stable
+
+
+```{r, fig.width = 18, fig.height =5}
+# Check
+
+
+seqLogo( consensusMatrix(DNAStringSet(seqs_set3_sub), as.prob = TRUE)[1:4,])
+
+
+#df1 <- as.data.frame(gr_up)
+#df2 <- as.data.frame(gr_down)
+#df3 <- as.data.frame(gr_null)
+
+```
+
+
+## Lost
+
+
+```{r, fig.width = 18, fig.height =5}
+# Check
+
+
+seqLogo( consensusMatrix(DNAStringSet(seqs_set2_sub[!is.na(seqs_set2_sub)]), as.prob = TRUE)[1:4,])
+
+
+#df1 <- as.data.frame(gr_up)
+#df2 <- as.data.frame(gr_down)
+#df3 <- as.data.frame(gr_null)
+
+```
+
+
+
+```{r, eval = F}
+# check
+seqs_set1 <-DNAStringSet(res_ext1$seqs_set)  # A sequence of length 61
+seqs_set2 <- res_ext2$seqs_set
+seqs_set3 <- DNAStringSet(res_ext3$seqs_set)  %>% reverseComplement()
+
+
+# Check
+
+seqLogo( consensusMatrix(DNAStringSet(seqs_set1), as.prob = TRUE)[1:4,])
+seqLogo( consensusMatrix(DNAStringSet(seqs_set2[!is.na(seqs_set2)]), as.prob = TRUE)[1:4,])
+seqLogo( consensusMatrix(DNAStringSet(seqs_set3), as.prob = TRUE)[1:4,])
+
+# Matching this to the original input
+matchID1 <- rr1$seqID_vec
+matchID2 <- rr2$seqID_vec
+matchID3 <- rr3$seqID_vec
+
+seqs_set1_sub <- seqs_set1
+seqs_set2_sub <- seqs_set2
+seqs_set3_sub <- seqs_set3
+
+
+
+for( i in 1:length(seqs_set1)){
+  seqs_set1_sub[i] <- subseq(seqs_set1[i], 25, 48)
+}
+for( i in which(!is.na(seqs_set2))){
+  seqs_set2_sub[i] <- subseq(seqs_set2[i], 25, 48)
+}
+for( i in 1:length(seqs_set3)){
+  seqs_set3_sub[i] <- subseq(seqs_set3[i], 25, 48)
+}
+
+# Check
+
+seqLogo( consensusMatrix(DNAStringSet(seqs_set1_sub) , as.prob = TRUE)[1:4,])
+seqLogo( consensusMatrix(DNAStringSet(seqs_set2_sub[!is.na(seqs_set2_sub)]), as.prob = TRUE)[1:4,])
+seqLogo( consensusMatrix(DNAStringSet(seqs_set3_sub), as.prob = TRUE)[1:4,])
+
+
+df1 <- as.data.frame(gr_up)
+df2 <- as.data.frame(gr_down)
+df3 <- as.data.frame(gr_null)
+
+```
+
+
+
+
+```{r, eval=TRUE}
+knitr::knit_exit()
+```
