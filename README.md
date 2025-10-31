@@ -45,12 +45,15 @@ Each folder contains a self-contained R Markdown vignette documenting input, ana
 
 ---
 
-📄 Citation
+## 📄 Citation
 
-If you use MoMotif in your research, please cite:
+If you use **MoMotif** in your research, please cite:
 
-Single base-pair resolution analysis of DNA binding motif with MoMotif reveals an oncogenic function of CTCF zinc-finger 1 mutation.
-Benjamin Lebeau, Kaiqiong Zhao, Maika Jangal, Tiejun Zhao, Maria Guerra, Celia M T Greenwood, Michael Witcher.
-Nucleic Acids Research, Volume 50, Issue 15, 26 August 2022, Pages 8441–8458.
-https://doi.org/10.1093/nar/gkac658
+> **Lebeau B\*, Zhao K\*, Jangal M, Zhao T, Guerra M, Greenwood CMT, Witcher M.**  
+> *Single base-pair resolution analysis of DNA binding motif with MoMotif reveals an oncogenic function of CTCF zinc-finger 1 mutation.*  
+> *Nucleic Acids Research* (2022), 50(15): 8441–8458.  
+> [https://doi.org/10.1093/nar/gkac658](https://doi.org/10.1093/nar/gkac658)
+>
+> (\*co-first authors)
+
 
