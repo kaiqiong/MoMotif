@@ -25,6 +25,8 @@ Each step can be executed independently or as part of a complete end-to-end work
 ---
 
 ## 📂 Repository Structure
+
+```
 vignette/
 ├── Step_1_differential_binding_using_csaw/
 ├── Step_2_GADEM_for_individual_clusters/
@@ -35,6 +37,8 @@ vignette/
 ├── Step_6_2_Other_validations/
 ├── Step_6_cancer_validation/
 └── Step_7_TAD_comparison/
+```
+
 
 
 Each folder contains a self-contained R Markdown vignette documenting input, analysis, and output for the corresponding step.
